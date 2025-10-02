@@ -1,31 +1,31 @@
 import React from "react";
 import "./Dashboard.css";
-
+  
 const motos = [
   {
     nombre: "Honda CBR",
     descripcion: "Una moto deportiva con excelente rendimiento.",
-    imagen: "/src/assets/cbr.png",
+    imagen: "/cbr.png",
   },
   {
     nombre: "Honda CB190R",
     descripcion: "Perfecta para ciudad, ágil y moderna.",
-    imagen: "/src/assets/cb190r.png",
+    imagen: "/cb190r.png",
   },
   {
     nombre: "Honda Invicta",
     descripcion: "Moto confiable para uso diario.",
-    imagen: "/src/assets/invicta.png",
+    imagen: "/invicta.png",
   },
   {
     nombre: "Honda Fireblade",
     descripcion: "Máxima potencia para los amantes de la velocidad.",
-    imagen: "/src/assets/fireblade.png",
+    imagen: "/fireblade.png",
   },
   {
     nombre: "Honda Twister",
     descripcion: "Versátil y cómoda, ideal para trayectos largos.",
-    imagen: "/src/assets/twister.png",
+    imagen: "/twister.png",
   },
   // {
   //   nombre: "Yamaha R1",
