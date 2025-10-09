@@ -28,4 +28,20 @@ export default defineConfig({
       }
     }
   ],
+
+  build: {
+    rollupOptions: {
+      output: {
+        // Fijar nombres sin hashes
+        entryFileNames: 'assets/[name].js',
+        chunkFileNames: 'assets/[name].js',
+        assetFileNames: ({ name }) => {
+          if (!name) return 'assets/[name][extname]'
+          if (name.endsWith('.css')) return 'assets/[name].css'
+          return 'assets/[name][extname]'
+        }
+      }
+    }
+  }
+
 })

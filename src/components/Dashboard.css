@@ -1,7 +1,36 @@
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100%;
+  height: auto !important;
+  overflow-y: auto !important; 
+  overflow-x: hidden;
+}
+
+#root {
+  display: block;
+  min-height: 100vh;
+}
+
+
+.app-container {
+  min-height: 100vh;
+  height: auto;
+  overflow: visible;
+}
+
+
+* {
+  box-sizing: border-box;
+}
+
 .dashboard-container {
   padding: 20px;
   font-family: Arial, sans-serif;
   text-align: center;
+  min-height: 100vh; 
+  padding-bottom: 60px; 
 }
 
 .dashboard-header {
@@ -56,7 +85,7 @@
   background: #2980b9;
 }
 
-/* Catálogo de motos */
+
 .dashboard-catalogo {
   margin-top: 40px;
 }
@@ -114,4 +143,57 @@
 
 .btn-vermas:hover {
   background: #d35400;
+}
+
+.dashboard-contacto {
+  margin-top: 50px;
+  background: #f4f4f4;
+  padding: 30px;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.dashboard-contacto h2 {
+  font-size: 24px;
+  color: #2c3e50;
+  margin-bottom: 20px;
+}
+
+.contact-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  max-width: 400px;
+  margin: 0 auto;
+}
+
+.contact-form input,
+.contact-form select {
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 15px;
+  transition: border-color 0.3s;
+}
+
+.contact-form input:focus,
+.contact-form select:focus {
+  outline: none;
+  border-color: #3498db;
+  box-shadow: 0 0 5px rgba(52, 152, 219, 0.3);
+}
+
+.btn-enviar {
+  background: #3498db;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background 0.3s;
+}
+
+.btn-enviar:hover {
+  background: #2980b9;
 }
