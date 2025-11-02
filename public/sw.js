@@ -1,6 +1,8 @@
-
 const CACHE_NAME = 'pwa';
 const RUNTIME_CACHE = 'cache-v5';
+const IDB_NAME = 'pwa-cart-db';
+const IDB_VERSION = 1;
+const IDB_STORE = 'cartQueue';
 
 const PRECACHE_URLS = [
   '/',
@@ -26,9 +28,7 @@ function shouldAutoCache(url) {
   return CACHE_PATTERNS.some(pattern => pattern.test(url.pathname));
 }
 
-const IDB_NAME = 'pwa-cart-db';
-const IDB_VERSION = 1;
-const IDB_STORE = 'cartQueue';
+// ======== IndexedDB Helpers ========
 
 function openCartDB() {
   return new Promise((resolve, reject) => {
@@ -48,9 +48,9 @@ async function idbAddCartRecord(record) {
   const db = await openCartDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
     tx.objectStore(IDB_STORE).add({ ...record, createdAt: Date.now() });
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
   });
 }
 
@@ -64,140 +64,128 @@ async function idbGetAllCartRecords() {
   });
 }
 
-async function idbClearCartStore() {
+async function idbDeleteRecord(id) {
   const db = await openCartDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
-    const req = tx.objectStore(IDB_STORE).clear();
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
+    tx.objectStore(IDB_STORE).delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
   });
 }
 
-self.addEventListener('install', (event) => {
-  console.log('[SW] 🔧 Instalando Service Worker...');
+// ======== Instalar / Activar ========
+
+self.addEventListener('install', event => {
+  console.log('[SW] Instalando...');
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('[SW] 📦 Abriendo cache:', CACHE_NAME);
-        return Promise.all(PRECACHE_URLS.map(url => 
-          fetch(url).then(response => {
-            if (response.ok) {
-              console.log('[SW] ✅ Cacheado:', url);
-              return cache.put(url, response);
-            }
-          }).catch(err => console.warn('[SW] ⚠ Error cacheando:', url, err))
-        ));
-      })
-      .then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache =>
+      Promise.all(
+        PRECACHE_URLS.map(url =>
+          fetch(url)
+            .then(res => res.ok && cache.put(url, res))
+            .catch(() => {})
+        )
+      )
+    ).then(() => self.skipWaiting())
   );
 });
 
-self.addEventListener('activate', (event) => {
-  console.log('[SW] 🚀 Activando Service Worker...');
+self.addEventListener('activate', event => {
+  console.log('[SW] Activando...');
   event.waitUntil(
-    Promise.all([
-      caches.keys().then((cacheNames) => {
-        return Promise.all(
-          cacheNames
-            .filter(name => name !== CACHE_NAME && name !== RUNTIME_CACHE)
-            .map(name => caches.delete(name))
-        );
-      }),
-      self.clients.claim()
-    ])
+    caches.keys().then(keys =>
+      Promise.all(keys.map(k => {
+        if (![CACHE_NAME, RUNTIME_CACHE].includes(k)) {
+          return caches.delete(k);
+        }
+      }))
+    ).then(() => self.clients.claim())
   );
 });
 
+// ======== Estrategia de cache ========
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
 
-  if (url.origin !== location.origin) return;
-  if (request.method !== 'GET') return;
+  if (url.origin !== location.origin || request.method !== 'GET') return;
 
   event.respondWith(
-    caches.match(request).then(cachedResponse => {
-      if (cachedResponse) {
-
-        fetch(request).then(networkResponse => {
-          if (networkResponse && networkResponse.ok) {
-            caches.open(RUNTIME_CACHE).then(cache => cache.put(request, networkResponse.clone()));
+    caches.match(request).then(cached => {
+      if (cached) {
+        // Actualiza en segundo plano
+        fetch(request).then(res => {
+          if (res.ok) {
+            caches.open(RUNTIME_CACHE).then(cache => cache.put(request, res.clone()));
           }
         }).catch(() => {});
-        return cachedResponse;
+        return cached;
       }
 
-      if (!navigator.onLine) {
-        if (request.headers.get('accept')?.includes('text/html')) {
-          return caches.match('/index.html');
-        }
-        return new Response('Recurso no disponible sin conexión', { status: 503 });
-      }
-
-      return fetch(request).then(networkResponse => {
-        if (networkResponse && networkResponse.ok && shouldAutoCache(url)) {
-          caches.open(RUNTIME_CACHE).then(cache => cache.put(request, networkResponse.clone()));
-        }
-        return networkResponse;
-      }).catch(() => caches.match('/index.html'));
+      // Sin conexión → intenta servir index.html
+      return fetch(request).catch(() =>
+        caches.match('/index.html')
+      );
     })
   );
 });
 
-self.addEventListener('message', (event) => {
+// ======== Mensajes desde cliente ========
+
+self.addEventListener('message', event => {
   if (!event.data) return;
 
-  if (event.data.type === 'ADD_TO_CART') {
-    idbAddCartRecord(event.data.item)
-      .then(() => {
-        console.log('[SW] 📥 Formulario guardado en IndexedDB', event.data.item);
-        processCartQueue();
-      })
-      .catch(err => console.error('[SW] ❌ Error guardando formulario', err));
+  switch (event.data.type) {
+    case 'ADD_TO_CART':
+      idbAddCartRecord(event.data.item)
+        .then(() => console.log('[SW] Guardado offline:', event.data.item))
+        .catch(err => console.error('[SW] Error guardando offline', err));
+      break;
+
+    case 'PROCESS_QUEUE':
+      processCartQueue();
+      break;
   }
-
-  if (event.data.type === 'PROCESS_QUEUE') {
-    processCartQueue();
-  }
 });
 
-self.addEventListener('online', () => {
-  console.log('[SW] 🌐 Conexión restaurada');
-  processCartQueue();
-});
-
-self.addEventListener('offline', () => {
-  console.log('[SW] 📡 Sin conexión');
-});
+// ======== Procesar cola offline ========
 
 async function processCartQueue() {
   try {
     const items = await idbGetAllCartRecords();
     if (!items.length) return;
 
-    console.log('[SW] 🔄 Enviando cola', items);
+    console.log('[SW] Intentando reenviar', items.length, 'cotizaciones...');
 
-    const endpoint = 'http://localhost:4000/cotizacion'; 
+    const endpoint = 'http://localhost:4000/cotizacion';
 
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(items)
-    });
+    for (const item of items) {
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(item)
+        });
 
-    if (!res.ok) throw new Error('Respuesta no OK');
+        if (res.ok) {
+          await idbDeleteRecord(item.id);
+          console.log('[SW] ✅ Enviada cotización offline:', item);
 
-    await idbClearCartStore();
-    console.log('[SW] ✅ Cola sincronizada y limpiada');
-
-    const allClients = await self.clients.matchAll({ includeUncontrolled: true });
-    allClients.forEach(client => client.postMessage({ type: 'QUOTATIONS_SYNCED' }));
-
+          // Notifica al cliente React
+          const allClients = await self.clients.matchAll({ includeUncontrolled: true });
+          allClients.forEach(client =>
+            client.postMessage({ type: 'QUOTATION_SYNCED', item })
+          );
+        }
+      } catch (err) {
+        console.warn('[SW] ⚠ Error enviando', item, err);
+      }
+    }
   } catch (err) {
-    console.warn('[SW] ⚠ No se pudo sincronizar la cola', err);
+    console.error('[SW] ❌ Error procesando la cola', err);
   }
 }
 
-console.log('[SW] 🎬 Service Worker cargado');
+console.log('[SW] 🎬 Cargado');
