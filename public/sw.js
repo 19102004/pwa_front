@@ -1,5 +1,5 @@
-const CACHE_NAME = 'pwa';
-const RUNTIME_CACHE = 'cache-v5';
+const CACHE_NAME = 'pwa-v6';
+const RUNTIME_CACHE = 'cache-v6';
 const IDB_NAME = 'pwa-cart-db';
 const IDB_VERSION = 1;
 const IDB_STORE = 'cartQueue';
@@ -187,5 +187,76 @@ async function processCartQueue() {
     console.error('[SW] ❌ Error procesando la cola', err);
   }
 }
+
+// ======== Notificaciones Push ========
+
+self.addEventListener('push', event => {
+  console.log('[SW] 📬 Notificación push recibida');
+
+  let notificationData = {
+    title: 'Notificación',
+    body: 'Tienes una nueva actualización',
+    icon: '/cb190r.png',
+    badge: '/cb190r.png',
+    data: { url: '/' }
+  };
+
+  if (event.data) {
+    try {
+      notificationData = event.data.json();
+      console.log('[SW] Datos de notificación:', notificationData);
+    } catch (err) {
+      console.error('[SW] Error parseando datos de notificación:', err);
+    }
+  }
+
+  const options = {
+    body: notificationData.body,
+    icon: notificationData.icon || '/cb190r.png',
+    badge: notificationData.badge || '/cb190r.png',
+    data: notificationData.data,
+    tag: notificationData.tag || 'default-notification',
+    requireInteraction: notificationData.requireInteraction || false,
+    vibrate: [200, 100, 200],
+    actions: [
+      { action: 'open', title: 'Abrir', icon: '/cb190r.png' },
+      { action: 'close', title: 'Cerrar', icon: '/cb190r.png' }
+    ]
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(notificationData.title, options)
+  );
+});
+
+// Manejar clicks en las notificaciones
+self.addEventListener('notificationclick', event => {
+  console.log('[SW] 🖱️ Click en notificación:', event.action);
+
+  event.notification.close();
+
+  if (event.action === 'close') {
+    return;
+  }
+
+  // Abrir o enfocar la aplicación
+  const urlToOpen = event.notification.data?.url || '/';
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(windowClients => {
+        // Buscar si ya hay una ventana abierta
+        for (let client of windowClients) {
+          if (client.url.includes(urlToOpen) && 'focus' in client) {
+            return client.focus();
+          }
+        }
+        // Si no hay ventana abierta, abrir una nueva
+        if (clients.openWindow) {
+          return clients.openWindow(urlToOpen);
+        }
+      })
+  );
+});
 
 console.log('[SW] 🎬 Cargado');

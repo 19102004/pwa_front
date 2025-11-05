@@ -1,5 +1,11 @@
 import React, { useState, useEffect } from "react";
 import "./Dashboard.css";
+import { 
+  requestNotificationPermission, 
+  showLocalNotification, 
+  startQuotationPolling,
+  stopQuotationPolling 
+} from "../utils/notificationService";
 
 const motos = [
   { nombre: "Honda CBR", descripcion: "Una moto deportiva con excelente rendimiento.", imagen: "/cbr.png" },
@@ -12,6 +18,145 @@ const motos = [
 const Dashboard: React.FC = () => {
   const [formData, setFormData] = useState({ nombre: "", telefono: "", moto: "" });
   const [loading, setLoading] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [useLocalNotifications, setUseLocalNotifications] = useState(false);
+
+  // 🔔 Función para convertir la clave pública VAPID a Uint8Array
+  const urlBase64ToUint8Array = (base64String: string) => {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
+    
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  };
+
+  // 🔔 Activar notificaciones locales (alternativa que siempre funciona)
+  const activateLocalNotifications = async () => {
+    try {
+      const granted = await requestNotificationPermission();
+      
+      if (granted) {
+        setNotificationsEnabled(true);
+        setUseLocalNotifications(true);
+        
+        startQuotationPolling(30000); 
+        
+        showLocalNotification(
+          '🔔 Notificaciones Activadas',
+          'Recibirás alertas cuando haya nuevas cotizaciones (app abierta)',
+          '/cb190r.png'
+        );
+        
+        console.log('✅ Notificaciones locales activadas con polling');
+      } else {
+        alert('⚠️ Para recibir notificaciones, debes otorgar permisos en tu navegador.');
+      }
+    } catch (error) {
+      console.error('Error activando notificaciones locales:', error);
+      alert('⚠️ Error al activar notificaciones.');
+    }
+  };
+
+  const subscribeToPushNotifications = async () => {
+    try {
+      if (!('Notification' in window)) {
+        console.warn('Este navegador no soporta notificaciones');
+        alert('⚠️ Tu navegador no soporta notificaciones');
+        return;
+      }
+
+      if (!('PushManager' in window)) {
+        console.warn('Este navegador no soporta Push API');
+        alert('⚠️ Tu navegador no soporta notificaciones push');
+        return;
+      }
+
+      if (!('serviceWorker' in navigator)) {
+        console.warn('Este navegador no soporta Service Workers');
+        alert('⚠️ Tu navegador no soporta Service Workers');
+        return;
+      }
+
+      const permission = await Notification.requestPermission();
+      
+      if (permission !== 'granted') {
+        console.log('Permiso de notificaciones denegado');
+        return;
+      }
+
+      console.log('✅ Permiso de notificaciones concedido');
+
+      // Obtener el service worker registration
+      const registration = await navigator.serviceWorker.ready;
+      console.log('📱 Service Worker listo:', registration);
+
+      // Obtener la clave pública VAPID del servidor
+      console.log('🔑 Obteniendo clave pública VAPID del servidor...');
+      const response = await fetch('http://localhost:4000/push/vapid-public-key');
+      const data = await response.json();
+      
+      console.log('📥 Respuesta del servidor:', data);
+      
+      if (!data.success || !data.publicKey) {
+        throw new Error('No se pudo obtener la clave pública VAPID: ' + (data.message || 'Sin mensaje'));
+      }
+
+      const vapidPublicKey = data.publicKey;
+      console.log('🔑 Clave pública VAPID obtenida:', vapidPublicKey.substring(0, 20) + '...');
+      
+      const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
+      console.log('🔄 Clave convertida a Uint8Array, longitud:', convertedVapidKey.length);
+
+      console.log('📬 Intentando suscribirse a notificaciones push...');
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: convertedVapidKey
+      });
+
+      console.log('✅ Suscripción creada exitosamente:', subscription);
+
+      const subscribeResponse = await fetch('http://localhost:4000/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(subscription)
+      });
+
+      const subscribeData = await subscribeResponse.json();
+
+      if (subscribeData.success) {
+        console.log('✅ Suscrito a notificaciones push');
+        setNotificationsEnabled(true);
+        alert('🔔 ¡Notificaciones activadas! Recibirás alertas de nuevas cotizaciones.');
+      }
+    } catch (error: any) {
+      console.error('❌ Error al suscribirse a notificaciones push:', error);
+      
+      if (error.name === 'AbortError' || error.message.includes('push service error')) {
+        console.warn('⚠️ Push notifications no disponibles, usando sistema alternativo');
+        
+        const useAlternative = confirm(
+          '⚠️ Las notificaciones push no están disponibles (puede ser por problemas de red o firewall).\n\n' +
+          '¿Deseas activar notificaciones locales en su lugar?\n' +
+          '(Funcionan solo cuando la app está abierta)'
+        );
+        
+        if (useAlternative) {
+          activateLocalNotifications();
+        }
+      } else if (error.name === 'NotAllowedError') {
+        alert('⚠️ Permisos denegados. Por favor, permite las notificaciones en la configuración del navegador.');
+      } else {
+        alert('⚠️ Error: ' + error.message + '\n\nIntenta recargar la página.');
+      }
+    }
+  };
 
   // 📡 Configuración de comunicación con el Service Worker
   useEffect(() => {
@@ -31,6 +176,11 @@ const Dashboard: React.FC = () => {
         navigator.serviceWorker.controller.postMessage({ type: "PROCESS_QUEUE" });
       }
     });
+
+    // Limpiar polling al desmontar el componente
+    return () => {
+      stopQuotationPolling();
+    };
   }, []);
 
   // 🧩 Manejar cambios en los campos del formulario
@@ -52,7 +202,7 @@ const Dashboard: React.FC = () => {
     console.log(`[Dashboard] Estado conexión: ${online ? "Online" : "Offline"}`);
 
     if (!online) {
-      // 📴 Guardar directamente offline
+      //  Guardar directamente offline
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({
           type: "ADD_TO_CART",
@@ -68,7 +218,7 @@ const Dashboard: React.FC = () => {
       return;
     }
 
-    // 🌐 Si hay conexión, intentar enviar al servidor
+    //  Si hay conexión, intentar enviar al servidor
     try {
       const response = await fetch("http://localhost:4000/cotizacion", {
         method: "POST",
@@ -103,6 +253,50 @@ const Dashboard: React.FC = () => {
       <header className="dashboard-header">
         <h1>🏍️ Tienda de Motos</h1>
         <p>Bienvenido al panel de administración</p>
+        <div style={{ marginTop: '10px' }}>
+          {notificationsEnabled ? (
+            <span style={{ color: '#4caf50', fontWeight: 'bold' }}>
+              ✅ Notificaciones activadas
+              {useLocalNotifications && (
+                <span style={{ fontSize: '0.85em', marginLeft: '8px' }}>
+                  (modo local - app abierta)
+                </span>
+              )}
+            </span>
+          ) : (
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button 
+                onClick={subscribeToPushNotifications}
+                style={{
+                  padding: '8px 16px',
+                  background: 'linear-gradient(135deg, #ff6b35 0%, #f7931e 100%)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '5px',
+                  cursor: 'pointer',
+                  fontWeight: 'bold'
+                }}
+              >
+                🔔 Activar Notificaciones Push
+              </button>
+              <button 
+                onClick={activateLocalNotifications}
+                style={{
+                  padding: '8px 16px',
+                  background: 'linear-gradient(135deg, #4caf50 0%, #45a049 100%)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '5px',
+                  cursor: 'pointer',
+                  fontWeight: 'bold'
+                }}
+                title="Notificaciones locales (funcionan solo cuando la app está abierta)"
+              >
+                🔕 Modo Local
+              </button>
+            </div>
+          )}
+        </div>
       </header>
 
       {/* 📊 Estadísticas */}
