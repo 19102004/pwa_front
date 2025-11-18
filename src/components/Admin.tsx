@@ -34,7 +34,7 @@ const Admin: React.FC = () => {
   const cargarUsuarios = async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:4000/usuario/todos');
+      const res = await fetch('https://pwa-back-6fqc.onrender.com/usuario/todos');
       const data = await res.json();
       
       if (res.ok) {
@@ -96,7 +96,7 @@ const Admin: React.FC = () => {
       setNotificaciones(prev => [nuevaNotificacion, ...prev]);
 
       // Enviar notificación PUSH al backend
-      const res = await fetch(`http://localhost:4000/usuario/send-notification/${userId}`, {
+      const res = await fetch(`https://pwa-back-6fqc.onrender.com/usuario/send-notification/${userId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -180,7 +180,7 @@ const Admin: React.FC = () => {
 
     for (const user of suscritos) {
       try {
-        const res = await fetch(`http://localhost:4000/usuario/send-notification/${user._id}`, {
+        const res = await fetch(`https://pwa-back-6fqc.onrender.com/usuario/send-notification/${user._id}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

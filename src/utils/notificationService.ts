@@ -4,10 +4,10 @@ interface ExtendedNotificationOptions extends NotificationOptions {
   vibrate?: number[];
 }
 
-const VAPID_PUBLIC_KEY_URL = 'http://localhost:4000/push/vapid-public-key';
-const SUBSCRIBE_URL = 'http://localhost:4000/push/subscribe';
-const ASSOCIATE_USER_URL = 'http://localhost:4000/usuario/subscribe-push';
-const UNSUBSCRIBE_USER_URL = 'http://localhost:4000/usuario/unsubscribe-push'; // ⭐ NUEVO
+const VAPID_PUBLIC_KEY_URL = 'https://pwa-back-6fqc.onrender.com/push/vapid-public-key';
+const SUBSCRIBE_URL = 'https://pwa-back-6fqc.onrender.com/push/subscribe';
+const ASSOCIATE_USER_URL = 'https://pwa-back-6fqc.onrender.com/usuario/subscribe-push';
+const UNSUBSCRIBE_USER_URL = 'https://pwa-back-6fqc.onrender.com/usuario/unsubscribe-push'; 
 
 /**
  * Convertir clave VAPID a Uint8Array
@@ -347,7 +347,7 @@ export const startQuotationPolling = async (intervalMs: number = 30000) => {
   }
 
   try {
-    const response = await fetch('http://localhost:4000/cotizacion');
+    const response = await fetch('https://pwa-back-6fqc.onrender.com/cotizacion');
     const data = await response.json();
     if (data.success) {
       lastQuotationCount = data.cotizaciones.length;
@@ -359,7 +359,7 @@ export const startQuotationPolling = async (intervalMs: number = 30000) => {
 
   pollingInterval = setInterval(async () => {
     try {
-      const response = await fetch('http://localhost:4000/cotizacion');
+      const response = await fetch('https://pwa-back-6fqc.onrender.com/cotizacion');
       const data = await response.json();
       
       if (data.success) {
