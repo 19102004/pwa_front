@@ -25,6 +25,7 @@ const Dashboard = () => {
   const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
   const [username, setUsername] = useState<string>('');
   const [pendingQuotations, setPendingQuotations] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false); // ⭐ Nuevo flag anti-duplicados
 
   // Recuperar username y verificar suscripción al cargar
   useEffect(() => {
@@ -166,43 +167,37 @@ const Dashboard = () => {
       console.log('[Dashboard] Mensaje del SW:', event.data);
 
       switch (event.data?.type) {
-        case 'QUOTATION_SYNCED':
-          console.log('✅ Cotización sincronizada:', event.data.item);
-          alert(`✅ Cotización sincronizada: ${event.data.item.nombre}`);
-          checkPendingQueue();
-          break;
-
         case 'SYNC_COMPLETE':
-          console.log(`📊 Sincronización completa: ${event.data.successCount}/${event.data.total}`);
+          // ⭐ UNA SOLA alerta con el resumen
           if (event.data.successCount > 0) {
-            alert(`✅ Se enviaron ${event.data.successCount} cotizaciones pendientes`);
+            alert(`✅ Conexión restablecida\n📤 ${event.data.successCount} cotización(es) enviada(s) exitosamente`);
+          }
+          if (event.data.failCount > 0) {
+            console.warn(`⚠️ ${event.data.failCount} cotización(es) no se pudieron enviar`);
           }
           checkPendingQueue();
-          break;
-
-        case 'CART_SAVED':
-          if (event.data.success) {
-            console.log('💾 Guardado offline confirmado');
-          } else {
-            console.error('❌ Error guardando offline:', event.data.error);
-          }
           break;
 
         case 'QUEUE_STATUS':
           setPendingQuotations(event.data.count);
           console.log(`📋 Cotizaciones pendientes: ${event.data.count}`);
           break;
+
+        case 'CART_SAVED':
+          if (!event.data.success) {
+            console.error('❌ Error guardando offline:', event.data.error);
+          }
+          break;
       }
     };
 
     navigator.serviceWorker.addEventListener("message", messageHandler);
 
-    // Evento online
+    // ⭐ Evento online simplificado
     const onlineHandler = () => {
-      console.log('🌐 Conexión restaurada, procesando cola...');
-      if (navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({ type: "PROCESS_QUEUE" });
-      }
+      console.log('🌐 Conexión restaurada');
+      // El SW ya maneja esto, solo actualizamos UI
+      setTimeout(() => checkPendingQueue(), 3000);
     };
 
     window.addEventListener("online", onlineHandler);
@@ -224,6 +219,12 @@ const Dashboard = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // ⭐ Prevenir doble submit
+    if (isSubmitting) {
+      console.warn('⚠️ Ya hay un envío en proceso, ignorando...');
+      return;
+    }
+
     if (!formData.nombre || !formData.telefono || !formData.moto) {
       alert("⚠️ Completa todos los campos.");
       return;
@@ -236,8 +237,9 @@ const Dashboard = () => {
     console.groupEnd();
 
     setLoading(true);
+    setIsSubmitting(true); // ⭐ Bloquear múltiples envíos
 
-    // ⭐ MODO OFFLINE: Guardar en IndexedDB
+    // ⭐ MODO OFFLINE: Guardar en IndexedDB SOLAMENTE
     if (!navigator.onLine) {
       console.log('📴 Sin conexión detectada, guardando offline...');
       
@@ -254,10 +256,11 @@ const Dashboard = () => {
       
       setFormData({ nombre: "", telefono: "", moto: "" });
       setLoading(false);
+      setIsSubmitting(false);
       return;
     }
 
-    // ⭐ MODO ONLINE: Enviar directamente
+    // ⭐ MODO ONLINE: Enviar directamente (NO guardar offline)
     const endpoint = "https://pwa-back-h0cr.onrender.com/cotizacion";
     
     try {
@@ -309,8 +312,9 @@ const Dashboard = () => {
       console.log('✅ COTIZACIÓN ENVIADA EXITOSAMENTE');
       alert(`✅ Cotización enviada correctamente!\n📋 ID: ${data.cotizacion._id}\n👤 Cliente: ${data.cotizacion.nombre}`);
 
-      // Procesar cola pendiente si hay
-      if (navigator.serviceWorker.controller) {
+      // ⭐ Procesar SOLO la cola pendiente (no la que acabamos de enviar)
+      if (navigator.serviceWorker.controller && pendingQuotations > 0) {
+        console.log('🔄 Procesando cotizaciones pendientes...');
         navigator.serviceWorker.controller.postMessage({ type: "PROCESS_QUEUE" });
       }
 
@@ -321,7 +325,7 @@ const Dashboard = () => {
       console.error('Stack:', error.stack);
       console.groupEnd();
       
-      // Si falla, guardar offline como respaldo
+      // ⭐ Si falla, guardar offline como respaldo
       const shouldSaveOffline = confirm(
         `⚠️ Error al enviar:\n${error.message}\n\n¿Guardar offline para enviar después?`
       );
@@ -340,6 +344,8 @@ const Dashboard = () => {
     } finally {
       setFormData({ nombre: "", telefono: "", moto: "" });
       setLoading(false);
+      // ⭐ Pequeño delay antes de permitir otro envío
+      setTimeout(() => setIsSubmitting(false), 1000);
     }
   };
 
@@ -524,7 +530,7 @@ const Dashboard = () => {
               <option key={index} value={moto.nombre}>{moto.nombre}</option>
             ))}
           </select>
-          <button type="submit" className="btn-enviar" disabled={loading}>
+          <button type="submit" className="btn-enviar" disabled={loading || isSubmitting}>
             {loading ? "⏳ Enviando..." : "📩 Enviar Solicitud"}
           </button>
         </form>

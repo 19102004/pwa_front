@@ -1,5 +1,5 @@
-const CACHE_NAME = 'pwa-v8'; // ⭐ Nueva versión
-const RUNTIME_CACHE = 'cache-v8';
+const CACHE_NAME = 'pwa-v9'; // ⭐ Nueva versión
+const RUNTIME_CACHE = 'cache-v9';
 const IDB_NAME = 'pwa-cart-db';
 const IDB_VERSION = 1;
 const IDB_STORE = 'cartQueue';
@@ -26,6 +26,10 @@ function shouldAutoCache(url) {
   return CACHE_PATTERNS.some(pattern => pattern.test(url.pathname));
 }
 
+// ⭐ Variables de control
+let isProcessingQueue = false;
+let processingTimeout = null;
+
 // ======== IndexedDB Helpers ========
 
 function openCartDB() {
@@ -47,7 +51,15 @@ async function idbAddCartRecord(record) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
     const store = tx.objectStore(IDB_STORE);
-    const request = store.add({ ...record, createdAt: Date.now() });
+    
+    // ⭐ Crear registro con timestamp único
+    const uniqueRecord = {
+      ...record,
+      createdAt: Date.now(),
+      uniqueId: `${record.nombre}-${record.telefono}-${Date.now()}`
+    };
+    
+    const request = store.add(uniqueRecord);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -86,15 +98,11 @@ self.addEventListener('install', event => {
               if (res.ok) {
                 return cache.put(url, res);
               }
-              console.warn(`[SW] ⚠️ No se pudo cachear ${url}`);
             })
-            .catch(err => console.warn(`[SW] ⚠️ Error cacheando ${url}:`, err))
+            .catch(() => {})
         )
       )
-    ).then(() => {
-      console.log('[SW] ✅ Precache completado');
-      return self.skipWaiting();
-    })
+    ).then(() => self.skipWaiting())
   );
 });
 
@@ -108,23 +116,19 @@ self.addEventListener('activate', event => {
           return caches.delete(k);
         }
       }))
-    ).then(() => {
-      console.log('[SW] ✅ Service Worker activado');
-      return self.clients.claim();
-    })
+    ).then(() => self.clients.claim())
   );
 });
 
 // ======== Estrategia de cache ========
-// ⭐ CRÍTICO: NO interceptar requests a la API
+
 self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // ⭐ NO INTERCEPTAR requests a la API externa
+  // ⭐ NO INTERCEPTAR requests a la API
   if (url.origin.includes('pwa-back-h0cr.onrender.com')) {
-    console.log('[SW] 🌐 Dejando pasar request a API:', request.method, url.pathname);
-    return; // Dejar pasar sin interceptar
+    return;
   }
 
   // Solo cachear GET del mismo origen
@@ -135,7 +139,6 @@ self.addEventListener('fetch', event => {
   event.respondWith(
     caches.match(request).then(cached => {
       if (cached) {
-        // Actualiza en segundo plano si hay conexión
         fetch(request).then(res => {
           if (res && res.ok) {
             caches.open(RUNTIME_CACHE).then(cache => cache.put(request, res.clone()));
@@ -144,9 +147,7 @@ self.addEventListener('fetch', event => {
         return cached;
       }
 
-      // No hay cache, intenta fetch
       return fetch(request).then(response => {
-        // Si es un recurso que debe cachearse, guárdalo
         if (response.ok && shouldAutoCache(url)) {
           const responseClone = response.clone();
           caches.open(RUNTIME_CACHE).then(cache => {
@@ -155,7 +156,6 @@ self.addEventListener('fetch', event => {
         }
         return response;
       }).catch(() => {
-        // Sin conexión, intenta servir index.html para SPA
         return caches.match('/index.html');
       });
     })
@@ -167,7 +167,7 @@ self.addEventListener('fetch', event => {
 self.addEventListener('message', event => {
   if (!event.data) return;
 
-  console.log('[SW] 📨 Mensaje recibido:', event.data.type);
+  console.log('[SW] 📨 Mensaje:', event.data.type);
 
   switch (event.data.type) {
     case 'ADD_TO_CART':
@@ -175,7 +175,7 @@ self.addEventListener('message', event => {
       break;
 
     case 'PROCESS_QUEUE':
-      processCartQueue();
+      scheduleQueueProcessing();
       break;
 
     case 'CHECK_QUEUE':
@@ -184,37 +184,12 @@ self.addEventListener('message', event => {
   }
 });
 
-// ⭐ Variable para evitar procesamiento simultáneo
-let isProcessingQueue = false;
-
-// Manejar guardado offline
+// ⭐ Guardar offline (SIN enviar inmediatamente)
 async function handleAddToCart(event) {
   try {
-    // ⭐ Verificar si ya existe este registro (evitar duplicados)
-    const existingItems = await idbGetAllCartRecords();
-    const isDuplicate = existingItems.some(item => 
-      item.nombre === event.data.item.nombre &&
-      item.telefono === event.data.item.telefono &&
-      item.moto === event.data.item.moto &&
-      (Date.now() - item.createdAt) < 5000 // Menos de 5 segundos
-    );
-
-    if (isDuplicate) {
-      console.warn('[SW] ⚠️ Cotización duplicada detectada, ignorando...');
-      if (event.source) {
-        event.source.postMessage({
-          type: 'CART_SAVED',
-          success: false,
-          error: 'Cotización duplicada'
-        });
-      }
-      return;
-    }
-
     const id = await idbAddCartRecord(event.data.item);
     console.log('[SW] 💾 Guardado offline con ID:', id);
     
-    // Confirmar al cliente
     if (event.source) {
       event.source.postMessage({
         type: 'CART_SAVED',
@@ -223,12 +198,10 @@ async function handleAddToCart(event) {
       });
     }
 
-    // ⭐ NO procesar inmediatamente si estamos online
-    // Dejar que el Dashboard lo envíe directamente
-    console.log('[SW] ℹ️ Cotización guardada, esperando reconexión para enviar');
+    // ⭐ NO procesar inmediatamente, esperar evento 'online'
     
   } catch (error) {
-    console.error('[SW] ❌ Error guardando offline:', error);
+    console.error('[SW] ❌ Error guardando:', error);
     if (event.source) {
       event.source.postMessage({
         type: 'CART_SAVED',
@@ -255,18 +228,41 @@ async function checkQueueStatus(event) {
   }
 }
 
+// ⭐ Programar procesamiento de cola (evita llamadas múltiples)
+function scheduleQueueProcessing() {
+  // Cancelar cualquier procesamiento pendiente
+  if (processingTimeout) {
+    clearTimeout(processingTimeout);
+  }
+
+  // Programar nuevo procesamiento
+  processingTimeout = setTimeout(() => {
+    if (!isProcessingQueue) {
+      processCartQueue();
+    }
+  }, 2000); // 2 segundos de delay
+}
+
 // ======== Procesar cola offline ========
 
 async function processCartQueue() {
+  if (isProcessingQueue) {
+    console.log('[SW] ⏸️ Procesamiento ya en curso');
+    return;
+  }
+
   try {
+    isProcessingQueue = true;
+    
     const items = await idbGetAllCartRecords();
     
     if (!items.length) {
-      console.log('[SW] ✅ Cola vacía, nada que enviar');
+      console.log('[SW] ✅ Cola vacía');
+      isProcessingQueue = false;
       return;
     }
 
-    console.log(`[SW] 📤 Procesando ${items.length} cotizaciones pendientes...`);
+    console.log(`[SW] 📤 Procesando ${items.length} cotización(es)...`);
 
     const endpoint = 'https://pwa-back-h0cr.onrender.com/cotizacion';
     let successCount = 0;
@@ -274,7 +270,7 @@ async function processCartQueue() {
 
     for (const item of items) {
       try {
-        console.log('[SW] 🚀 Enviando cotización:', item.nombre);
+        console.log(`[SW] 🚀 Enviando: ${item.nombre}`);
 
         const response = await fetch(endpoint, {
           method: 'POST',
@@ -289,36 +285,26 @@ async function processCartQueue() {
           })
         });
 
-        const responseText = await response.text();
-        console.log('[SW] 📥 Respuesta del servidor:', response.status, responseText);
-
         if (response.ok) {
           await idbDeleteRecord(item.id);
           successCount++;
-          console.log('[SW] ✅ Cotización enviada y eliminada de cola:', item.nombre);
-
-          // Notificar al cliente
-          const allClients = await self.clients.matchAll({ includeUncontrolled: true });
-          allClients.forEach(client =>
-            client.postMessage({ 
-              type: 'QUOTATION_SYNCED', 
-              item,
-              success: true
-            })
-          );
+          console.log(`[SW] ✅ Enviada: ${item.nombre}`);
         } else {
           failCount++;
-          console.error('[SW] ❌ Error HTTP:', response.status, responseText);
+          console.error(`[SW] ❌ Error HTTP ${response.status}`);
         }
       } catch (err) {
         failCount++;
-        console.error('[SW] ❌ Error de red enviando cotización:', err);
+        console.error('[SW] ❌ Error de red:', err.message);
       }
+
+      // Pequeña pausa entre envíos
+      await new Promise(resolve => setTimeout(resolve, 300));
     }
 
     console.log(`[SW] 📊 Resultado: ${successCount} éxito, ${failCount} fallos`);
 
-    // Notificar resumen al cliente
+    // ⭐ Enviar UNA SOLA notificación al cliente
     const allClients = await self.clients.matchAll({ includeUncontrolled: true });
     allClients.forEach(client =>
       client.postMessage({ 
@@ -330,20 +316,22 @@ async function processCartQueue() {
     );
 
   } catch (err) {
-    console.error('[SW] ❌ Error crítico procesando cola:', err);
+    console.error('[SW] ❌ Error crítico:', err);
+  } finally {
+    isProcessingQueue = false;
   }
 }
 
-// Auto-sincronizar cuando se recupera conexión
+// ⭐ Auto-sincronizar cuando se recupera conexión
 self.addEventListener('online', () => {
-  console.log('[SW] 🌐 Conexión restaurada, procesando cola...');
-  setTimeout(() => processCartQueue(), 2000); // Delay de 2s para estabilidad
+  console.log('[SW] 🌐 Conexión restaurada');
+  scheduleQueueProcessing();
 });
 
 // ======== Notificaciones Push ========
 
 self.addEventListener('push', event => {
-  console.log('[SW] 📬 Notificación push recibida');
+  console.log('[SW] 📬 Push recibido');
 
   let notificationData = {
     title: 'Notificación',
@@ -356,9 +344,8 @@ self.addEventListener('push', event => {
   if (event.data) {
     try {
       notificationData = event.data.json();
-      console.log('[SW] 📋 Datos de notificación:', notificationData);
     } catch (err) {
-      console.error('[SW] ❌ Error parseando notificación:', err);
+      console.error('[SW] ❌ Error parseando push:', err);
     }
   }
 
@@ -371,8 +358,8 @@ self.addEventListener('push', event => {
     requireInteraction: notificationData.requireInteraction || false,
     vibrate: [200, 100, 200],
     actions: [
-      { action: 'open', title: 'Abrir', icon: '/cb190r.png' },
-      { action: 'close', title: 'Cerrar', icon: '/cb190r.png' }
+      { action: 'open', title: 'Abrir' },
+      { action: 'close', title: 'Cerrar' }
     ]
   };
 
@@ -382,7 +369,7 @@ self.addEventListener('push', event => {
 });
 
 self.addEventListener('notificationclick', event => {
-  console.log('[SW] 🖱️ Click en notificación:', event.action);
+  console.log('[SW] 🖱️ Click en notificación');
   event.notification.close();
 
   if (event.action === 'close') return;
@@ -404,4 +391,4 @@ self.addEventListener('notificationclick', event => {
   );
 });
 
-console.log('[SW] 🎬 Service Worker cargado - Versión', CACHE_NAME);
+console.log('[SW] 🎬 Cargado - Versión', CACHE_NAME);
