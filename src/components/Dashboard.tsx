@@ -229,7 +229,12 @@ const Dashboard = () => {
       return;
     }
 
-    console.log('🚀 Iniciando envío de cotización:', formData);
+    console.group('🚀 ENVÍO DE COTIZACIÓN');
+    console.log('📦 Datos:', formData);
+    console.log('🌐 Online:', navigator.onLine);
+    console.log('🔧 SW activo:', navigator.serviceWorker.controller ? 'SÍ' : 'NO');
+    console.groupEnd();
+
     setLoading(true);
 
     // ⭐ MODO OFFLINE: Guardar en IndexedDB
@@ -252,13 +257,20 @@ const Dashboard = () => {
       return;
     }
 
-    // ⭐ MODO ONLINE: Enviar directamente (SIN pasar por Service Worker)
+    // ⭐ MODO ONLINE: Enviar directamente
+    const endpoint = "https://pwa-back-h0cr.onrender.com/cotizacion";
+    
     try {
-      console.log('🌐 ONLINE - Enviando cotización directamente a la API...');
-      console.log('📡 Endpoint:', "https://pwa-back-h0cr.onrender.com/cotizacion");
-      console.log('📦 Payload:', JSON.stringify(formData, null, 2));
+      console.group('🌐 FETCH A API');
+      console.log('📡 URL:', endpoint);
+      console.log('📋 Method: POST');
+      console.log('📦 Body:', JSON.stringify(formData, null, 2));
+      console.log('⏱️ Iniciando request...', new Date().toLocaleTimeString());
+      console.groupEnd();
       
-      const res = await fetch("https://pwa-back-h0cr.onrender.com/cotizacion", {
+      const startTime = Date.now();
+      
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -267,40 +279,63 @@ const Dashboard = () => {
         body: JSON.stringify(formData),
       });
 
-      console.log('📥 Respuesta HTTP:', res.status, res.statusText);
+      const endTime = Date.now();
+      const duration = endTime - startTime;
+
+      console.group('📥 RESPUESTA DEL SERVIDOR');
+      console.log('⏱️ Duración:', duration, 'ms');
+      console.log('🔢 Status:', res.status, res.statusText);
+      console.log('📋 Headers:', Object.fromEntries(res.headers.entries()));
+      
+      const responseText = await res.text();
+      console.log('📄 Body (raw):', responseText);
+      
+      let data;
+      try {
+        data = JSON.parse(responseText);
+        console.log('📄 Body (parsed):', data);
+      } catch (parseError) {
+        console.error('❌ Error parseando JSON:', parseError);
+        console.groupEnd();
+        throw new Error(`Respuesta no es JSON válido: ${responseText.substring(0, 100)}`);
+      }
+      
+      console.groupEnd();
 
       if (!res.ok) {
-        const errorText = await res.text();
-        console.error('❌ Error del servidor:', errorText);
-        throw new Error(`Error HTTP ${res.status}: ${errorText}`);
+        throw new Error(data.message || `Error HTTP ${res.status}`);
       }
 
-      const data = await res.json();
-      console.log('✅ Respuesta exitosa del servidor:', data);
-      
+      console.log('✅ COTIZACIÓN ENVIADA EXITOSAMENTE');
       alert(`✅ Cotización enviada correctamente!\n📋 ID: ${data.cotizacion._id}\n👤 Cliente: ${data.cotizacion.nombre}`);
 
       // Procesar cola pendiente si hay
       if (navigator.serviceWorker.controller) {
-        console.log('🔄 Procesando cola pendiente...');
         navigator.serviceWorker.controller.postMessage({ type: "PROCESS_QUEUE" });
       }
 
     } catch (error: any) {
-      console.error('❌ ERROR CRÍTICO enviando cotización:', error);
+      console.group('❌ ERROR EN ENVÍO');
+      console.error('Tipo:', error.name);
+      console.error('Mensaje:', error.message);
       console.error('Stack:', error.stack);
+      console.groupEnd();
       
       // Si falla, guardar offline como respaldo
-      if (navigator.serviceWorker.controller) {
+      const shouldSaveOffline = confirm(
+        `⚠️ Error al enviar:\n${error.message}\n\n¿Guardar offline para enviar después?`
+      );
+      
+      if (shouldSaveOffline && navigator.serviceWorker.controller) {
         console.log('💾 Guardando como respaldo offline...');
         navigator.serviceWorker.controller.postMessage({
           type: "ADD_TO_CART",
           item: formData,
         });
-        alert(`⚠️ Error de conexión.\n💾 Cotización guardada offline.\nSe enviará al restaurar conexión.\n\nError: ${error.message}`);
+        alert(`💾 Cotización guardada offline.\nSe enviará al restaurar conexión.`);
         checkPendingQueue();
-      } else {
-        alert(`❌ Error: ${error.message}\nIntenta nuevamente más tarde.`);
+      } else if (!shouldSaveOffline) {
+        alert(`❌ Cotización no guardada. Intenta nuevamente.`);
       }
     } finally {
       setFormData({ nombre: "", telefono: "", moto: "" });

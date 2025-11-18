@@ -1,5 +1,5 @@
-const CACHE_NAME = 'pwa-v7'; // ⭐ Incrementa versión
-const RUNTIME_CACHE = 'cache-v7';
+const CACHE_NAME = 'pwa-v8'; // ⭐ Nueva versión
+const RUNTIME_CACHE = 'cache-v8';
 const IDB_NAME = 'pwa-cart-db';
 const IDB_VERSION = 1;
 const IDB_STORE = 'cartQueue';
@@ -115,15 +115,21 @@ self.addEventListener('activate', event => {
   );
 });
 
-// ======== Estrategia de cache (solo GET) ========
-
+// ======== Estrategia de cache ========
+// ⭐ CRÍTICO: NO interceptar requests a la API
 self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // ⚠️ IMPORTANTE: Solo cachear GET requests del mismo origen
-  if (request.method !== 'GET' || url.origin !== location.origin) {
-    return; // Dejar pasar POST/PUT/DELETE sin interceptar
+  // ⭐ NO INTERCEPTAR requests a la API externa
+  if (url.origin.includes('pwa-back-h0cr.onrender.com')) {
+    console.log('[SW] 🌐 Dejando pasar request a API:', request.method, url.pathname);
+    return; // Dejar pasar sin interceptar
+  }
+
+  // Solo cachear GET del mismo origen
+  if (url.origin !== location.origin || request.method !== 'GET') {
+    return;
   }
 
   event.respondWith(
@@ -178,9 +184,33 @@ self.addEventListener('message', event => {
   }
 });
 
-// ⭐ Nuevo: Manejar guardado offline
+// ⭐ Variable para evitar procesamiento simultáneo
+let isProcessingQueue = false;
+
+// Manejar guardado offline
 async function handleAddToCart(event) {
   try {
+    // ⭐ Verificar si ya existe este registro (evitar duplicados)
+    const existingItems = await idbGetAllCartRecords();
+    const isDuplicate = existingItems.some(item => 
+      item.nombre === event.data.item.nombre &&
+      item.telefono === event.data.item.telefono &&
+      item.moto === event.data.item.moto &&
+      (Date.now() - item.createdAt) < 5000 // Menos de 5 segundos
+    );
+
+    if (isDuplicate) {
+      console.warn('[SW] ⚠️ Cotización duplicada detectada, ignorando...');
+      if (event.source) {
+        event.source.postMessage({
+          type: 'CART_SAVED',
+          success: false,
+          error: 'Cotización duplicada'
+        });
+      }
+      return;
+    }
+
     const id = await idbAddCartRecord(event.data.item);
     console.log('[SW] 💾 Guardado offline con ID:', id);
     
@@ -193,11 +223,10 @@ async function handleAddToCart(event) {
       });
     }
 
-    // Si hay conexión, intentar enviar inmediatamente
-    if (navigator.onLine) {
-      console.log('[SW] 🌐 Detectada conexión, intentando enviar...');
-      await processCartQueue();
-    }
+    // ⭐ NO procesar inmediatamente si estamos online
+    // Dejar que el Dashboard lo envíe directamente
+    console.log('[SW] ℹ️ Cotización guardada, esperando reconexión para enviar');
+    
   } catch (error) {
     console.error('[SW] ❌ Error guardando offline:', error);
     if (event.source) {
@@ -210,7 +239,7 @@ async function handleAddToCart(event) {
   }
 }
 
-// ⭐ Nuevo: Verificar estado de la cola
+// Verificar estado de la cola
 async function checkQueueStatus(event) {
   try {
     const items = await idbGetAllCartRecords();
@@ -247,7 +276,7 @@ async function processCartQueue() {
       try {
         console.log('[SW] 🚀 Enviando cotización:', item.nombre);
 
-        const res = await fetch(endpoint, {
+        const response = await fetch(endpoint, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -260,10 +289,13 @@ async function processCartQueue() {
           })
         });
 
-        if (res.ok) {
+        const responseText = await response.text();
+        console.log('[SW] 📥 Respuesta del servidor:', response.status, responseText);
+
+        if (response.ok) {
           await idbDeleteRecord(item.id);
           successCount++;
-          console.log('[SW] ✅ Cotización enviada:', item.nombre);
+          console.log('[SW] ✅ Cotización enviada y eliminada de cola:', item.nombre);
 
           // Notificar al cliente
           const allClients = await self.clients.matchAll({ includeUncontrolled: true });
@@ -275,13 +307,12 @@ async function processCartQueue() {
             })
           );
         } else {
-          const errorData = await res.json().catch(() => ({}));
           failCount++;
-          console.warn('[SW] ⚠️ Error HTTP al enviar cotización:', res.status, errorData);
+          console.error('[SW] ❌ Error HTTP:', response.status, responseText);
         }
       } catch (err) {
         failCount++;
-        console.error('[SW] ❌ Error enviando cotización:', err);
+        console.error('[SW] ❌ Error de red enviando cotización:', err);
       }
     }
 
@@ -303,10 +334,10 @@ async function processCartQueue() {
   }
 }
 
-// ⭐ Auto-sincronizar cuando se recupera conexión
+// Auto-sincronizar cuando se recupera conexión
 self.addEventListener('online', () => {
   console.log('[SW] 🌐 Conexión restaurada, procesando cola...');
-  processCartQueue();
+  setTimeout(() => processCartQueue(), 2000); // Delay de 2s para estabilidad
 });
 
 // ======== Notificaciones Push ========
