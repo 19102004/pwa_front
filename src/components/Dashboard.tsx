@@ -200,7 +200,7 @@ const Dashboard = () => {
     }
 
     try {
-      const res = await fetch("https://pwa-back-6fqc.onrender.com/cotizacion", {
+      const res = await fetch("https://pwa-back-h0cr.onrender.com/cotizacion", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),

@@ -14,7 +14,7 @@ const Login: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch("https://pwa-back-6fqc.onrender.com/usuario/login", {
+      const res = await fetch("https://pwa-back-h0cr.onrender.com/usuario/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
@@ -46,7 +46,7 @@ const Login: React.FC = () => {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch("https://pwa-back-6fqc.onrender.com/usuario/register", {
+      const res = await fetch("https://pwa-back-h0cr.onrender.com/usuario/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: newUser, password: newPassword }),

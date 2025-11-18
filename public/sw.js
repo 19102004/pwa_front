@@ -159,7 +159,7 @@ async function processCartQueue() {
 
     console.log('[SW] Intentando reenviar', items.length, 'cotizaciones...');
 
-    const endpoint = 'https://pwa-back-6fqc.onrender.com/cotizacion';
+    const endpoint = 'https://pwa-back-h0cr.onrender.com/cotizacion';
 
     for (const item of items) {
       try {
