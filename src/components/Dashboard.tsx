@@ -6,9 +6,8 @@ import {
   startQuotationPolling,
   stopQuotationPolling,
   subscribeToPushNotifications,
-  unsubscribeFromPushNotifications // ⭐ NUEVO
+  unsubscribeFromPushNotifications
 } from "../utils/notificationService";
-// import PushNotificationTester from '../components/PushNotificationTester';
 
 const motos = [
   { nombre: "Honda CBR", descripcion: "Una moto deportiva con excelente rendimiento.", imagen: "/cbr.png" },
@@ -25,6 +24,7 @@ const Dashboard = () => {
   const [useLocalNotifications, setUseLocalNotifications] = useState(false);
   const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
   const [username, setUsername] = useState<string>('');
+  const [pendingQuotations, setPendingQuotations] = useState(0);
 
   // Recuperar username y verificar suscripción al cargar
   useEffect(() => {
@@ -41,7 +41,17 @@ const Dashboard = () => {
       setNotificationsEnabled(true);
       console.log('✅ Usuario ya tiene suscripción push:', savedId);
     }
+
+    // Verificar cola pendiente
+    checkPendingQueue();
   }, []);
+
+  // ⭐ Verificar cotizaciones pendientes
+  const checkPendingQueue = () => {
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'CHECK_QUEUE' });
+    }
+  };
 
   // Activar modo local
   const activateLocalNotifications = async () => {
@@ -112,7 +122,7 @@ const Dashboard = () => {
     }
   };
 
-  // ⭐ NUEVA FUNCIÓN: Desactivar notificaciones push
+  // Desactivar notificaciones push
   const deactivatePushNotifications = async () => {
     if (!username) {
       alert('⚠️ No se pudo obtener el nombre de usuario.');
@@ -148,23 +158,58 @@ const Dashboard = () => {
     }
   };
 
-  // Comunicación con el Service Worker
+  // ⭐ Comunicación mejorada con el Service Worker
   useEffect(() => {
-    if (navigator.serviceWorker) {
-      navigator.serviceWorker.addEventListener("message", (event) => {
-        if (event.data?.type === "QUOTATION_SYNCED") {
-          alert(`Cotización sincronizada: ${event.data.item.nombre}`);
-        }
-      });
-    }
+    if (!navigator.serviceWorker) return;
 
-    window.addEventListener("online", () => {
+    const messageHandler = (event: MessageEvent) => {
+      console.log('[Dashboard] Mensaje del SW:', event.data);
+
+      switch (event.data?.type) {
+        case 'QUOTATION_SYNCED':
+          console.log('✅ Cotización sincronizada:', event.data.item);
+          alert(`✅ Cotización sincronizada: ${event.data.item.nombre}`);
+          checkPendingQueue();
+          break;
+
+        case 'SYNC_COMPLETE':
+          console.log(`📊 Sincronización completa: ${event.data.successCount}/${event.data.total}`);
+          if (event.data.successCount > 0) {
+            alert(`✅ Se enviaron ${event.data.successCount} cotizaciones pendientes`);
+          }
+          checkPendingQueue();
+          break;
+
+        case 'CART_SAVED':
+          if (event.data.success) {
+            console.log('💾 Guardado offline confirmado');
+          } else {
+            console.error('❌ Error guardando offline:', event.data.error);
+          }
+          break;
+
+        case 'QUEUE_STATUS':
+          setPendingQuotations(event.data.count);
+          console.log(`📋 Cotizaciones pendientes: ${event.data.count}`);
+          break;
+      }
+    };
+
+    navigator.serviceWorker.addEventListener("message", messageHandler);
+
+    // Evento online
+    const onlineHandler = () => {
+      console.log('🌐 Conexión restaurada, procesando cola...');
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({ type: "PROCESS_QUEUE" });
       }
-    });
+    };
+
+    window.addEventListener("online", onlineHandler);
 
     return () => {
+      navigator.serviceWorker.removeEventListener("message", messageHandler);
+      window.removeEventListener("online", onlineHandler);
       stopQuotationPolling();
     };
   }, []);
@@ -180,43 +225,82 @@ const Dashboard = () => {
     e.preventDefault();
 
     if (!formData.nombre || !formData.telefono || !formData.moto) {
-      alert("Completa todos los campos.");
+      alert("⚠️ Completa todos los campos.");
       return;
     }
 
+    console.log('🚀 Iniciando envío de cotización:', formData);
     setLoading(true);
 
+    // ⭐ MODO OFFLINE: Guardar en IndexedDB
     if (!navigator.onLine) {
+      console.log('📴 Sin conexión detectada, guardando offline...');
+      
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({
           type: "ADD_TO_CART",
           item: formData,
         });
-        alert("Guardado offline. Se enviará al reconectar.");
+        alert("📴 Sin conexión.\n✅ Cotización guardada.\nSe enviará automáticamente al reconectar.");
+        checkPendingQueue();
+      } else {
+        alert("⚠️ Service Worker no está activo. Recarga la página.");
       }
+      
       setFormData({ nombre: "", telefono: "", moto: "" });
       setLoading(false);
       return;
     }
 
+    // ⭐ MODO ONLINE: Enviar directamente (SIN pasar por Service Worker)
     try {
+      console.log('🌐 ONLINE - Enviando cotización directamente a la API...');
+      console.log('📡 Endpoint:', "https://pwa-back-h0cr.onrender.com/cotizacion");
+      console.log('📦 Payload:', JSON.stringify(formData, null, 2));
+      
       const res = await fetch("https://pwa-back-h0cr.onrender.com/cotizacion", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
         body: JSON.stringify(formData),
       });
 
-      if (!res.ok) throw new Error();
+      console.log('📥 Respuesta HTTP:', res.status, res.statusText);
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('❌ Error del servidor:', errorText);
+        throw new Error(`Error HTTP ${res.status}: ${errorText}`);
+      }
 
       const data = await res.json();
-      alert(`Enviado correctamente. ID: ${data.cotizacion._id}`);
-    } catch {
+      console.log('✅ Respuesta exitosa del servidor:', data);
+      
+      alert(`✅ Cotización enviada correctamente!\n📋 ID: ${data.cotizacion._id}\n👤 Cliente: ${data.cotizacion.nombre}`);
+
+      // Procesar cola pendiente si hay
       if (navigator.serviceWorker.controller) {
+        console.log('🔄 Procesando cola pendiente...');
+        navigator.serviceWorker.controller.postMessage({ type: "PROCESS_QUEUE" });
+      }
+
+    } catch (error: any) {
+      console.error('❌ ERROR CRÍTICO enviando cotización:', error);
+      console.error('Stack:', error.stack);
+      
+      // Si falla, guardar offline como respaldo
+      if (navigator.serviceWorker.controller) {
+        console.log('💾 Guardando como respaldo offline...');
         navigator.serviceWorker.controller.postMessage({
           type: "ADD_TO_CART",
           item: formData,
         });
-        alert("Guardado offline.");
+        alert(`⚠️ Error de conexión.\n💾 Cotización guardada offline.\nSe enviará al restaurar conexión.\n\nError: ${error.message}`);
+        checkPendingQueue();
+      } else {
+        alert(`❌ Error: ${error.message}\nIntenta nuevamente más tarde.`);
       }
     } finally {
       setFormData({ nombre: "", telefono: "", moto: "" });
@@ -230,6 +314,22 @@ const Dashboard = () => {
       <header className="dashboard-header">
         <h1>🏍️ Tienda de Motos</h1>
         <p>Bienvenido, {username || 'Usuario'}</p>
+
+        {/* ⭐ Indicador de cotizaciones pendientes */}
+        {pendingQuotations > 0 && (
+          <div style={{
+            padding: "8px 16px",
+            background: "linear-gradient(135deg, #ff9800 0%, #f57c00 100%)",
+            color: "white",
+            borderRadius: "8px",
+            fontWeight: "bold",
+            fontSize: "0.9rem",
+            marginTop: "10px",
+            display: "inline-block"
+          }}>
+            📦 {pendingQuotations} cotización{pendingQuotations > 1 ? 'es' : ''} pendiente{pendingQuotations > 1 ? 's' : ''}
+          </div>
+        )}
 
         <div style={{ marginTop: "10px" }}>
           {notificationsEnabled ? (
@@ -255,7 +355,6 @@ const Dashboard = () => {
                 </span>
               )}
 
-              {/* ⭐ BOTÓN DE DESACTIVAR */}
               {!useLocalNotifications && (
                 <button
                   onClick={deactivatePushNotifications}
@@ -334,7 +433,7 @@ const Dashboard = () => {
       <section className="dashboard-stats">
         <div className="card"><h2>15</h2><p>Motos en inventario</p></div>
         <div className="card"><h2>8</h2><p>Ventas este mes</p></div>
-        <div className="card"><h2>3</h2><p>Pedidos pendientes</p></div>
+        <div className="card"><h2>{pendingQuotations}</h2><p>Cotizaciones pendientes</p></div>
       </section>
 
       {/* ACCIONES */}
@@ -394,9 +493,13 @@ const Dashboard = () => {
             {loading ? "⏳ Enviando..." : "📩 Enviar Solicitud"}
           </button>
         </form>
+        
+        {!navigator.onLine && (
+          <p style={{ color: "#ff9800", fontWeight: "bold", marginTop: "10px" }}>
+            📴 Sin conexión - Las cotizaciones se guardarán offline
+          </p>
+        )}
       </section>
-
-      {/* <PushNotificationTester /> */}
     </div>
   );
 };
