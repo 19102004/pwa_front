@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import "./Dashboard.css";
 import { 
   requestNotificationPermission, 
   showLocalNotification, 
   startQuotationPolling,
-  stopQuotationPolling 
+  stopQuotationPolling,
+  subscribeToPushNotifications,
+  unsubscribeFromPushNotifications // ⭐ NUEVO
 } from "../utils/notificationService";
+// import PushNotificationTester from '../components/PushNotificationTester';
 
 const motos = [
   { nombre: "Honda CBR", descripcion: "Una moto deportiva con excelente rendimiento.", imagen: "/cbr.png" },
@@ -15,231 +18,205 @@ const motos = [
   { nombre: "Honda Twister", descripcion: "Versátil y cómoda, ideal para trayectos largos.", imagen: "/twister.png" },
 ];
 
-const Dashboard: React.FC = () => {
+const Dashboard = () => {
   const [formData, setFormData] = useState({ nombre: "", telefono: "", moto: "" });
   const [loading, setLoading] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [useLocalNotifications, setUseLocalNotifications] = useState(false);
+  const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
+  const [username, setUsername] = useState<string>('');
 
-  // 🔔 Función para convertir la clave pública VAPID a Uint8Array
-  const urlBase64ToUint8Array = (base64String: string) => {
-    const padding = '='.repeat((4 - base64String.length % 4) % 4);
-    const base64 = (base64String + padding)
-      .replace(/-/g, '+')
-      .replace(/_/g, '/');
+  // Recuperar username y verificar suscripción al cargar
+  useEffect(() => {
+    const savedUsername = localStorage.getItem('username');
+    const savedId = localStorage.getItem('pushSubscriptionId');
     
-    const rawData = window.atob(base64);
-    const outputArray = new Uint8Array(rawData.length);
-    
-    for (let i = 0; i < rawData.length; ++i) {
-      outputArray[i] = rawData.charCodeAt(i);
+    if (savedUsername) {
+      setUsername(savedUsername);
+      console.log('✅ Usuario recuperado:', savedUsername);
     }
-    return outputArray;
-  };
+    
+    if (savedId) {
+      setSubscriptionId(savedId);
+      setNotificationsEnabled(true);
+      console.log('✅ Usuario ya tiene suscripción push:', savedId);
+    }
+  }, []);
 
-  // 🔔 Activar notificaciones locales (alternativa que siempre funciona)
+  // Activar modo local
   const activateLocalNotifications = async () => {
     try {
       const granted = await requestNotificationPermission();
-      
       if (granted) {
         setNotificationsEnabled(true);
         setUseLocalNotifications(true);
-        
-        startQuotationPolling(30000); 
-        
+
+        startQuotationPolling(30000);
+
         showLocalNotification(
-          '🔔 Notificaciones Activadas',
-          'Recibirás alertas cuando haya nuevas cotizaciones (app abierta)',
-          '/cb190r.png'
+          "🔔 Notificaciones Activadas",
+          "Recibirás alertas mientras la app esté abierta.",
+          "/cb190r.png"
         );
-        
-        console.log('✅ Notificaciones locales activadas con polling');
-      } else {
-        alert('⚠️ Para recibir notificaciones, debes otorgar permisos en tu navegador.');
+
+        console.log('✅ Notificaciones locales activadas');
       }
     } catch (error) {
-      console.error('Error activando notificaciones locales:', error);
-      alert('⚠️ Error al activar notificaciones.');
+      console.error('Error al activar notificaciones locales:', error);
+      alert("Error al activar notificaciones locales.");
     }
   };
 
-  const subscribeToPushNotifications = async () => {
+  // Activar notificaciones push
+  const activatePushNotifications = async () => {
     try {
-      if (!('Notification' in window)) {
-        console.warn('Este navegador no soporta notificaciones');
-        alert('⚠️ Tu navegador no soporta notificaciones');
+      if (!username) {
+        alert('⚠️ No se pudo obtener el nombre de usuario. Inicia sesión nuevamente.');
         return;
       }
 
-      if (!('PushManager' in window)) {
-        console.warn('Este navegador no soporta Push API');
-        alert('⚠️ Tu navegador no soporta notificaciones push');
-        return;
-      }
-
-      if (!('serviceWorker' in navigator)) {
-        console.warn('Este navegador no soporta Service Workers');
-        alert('⚠️ Tu navegador no soporta Service Workers');
+      if (!("Notification" in window) || !("PushManager" in window) || !("serviceWorker" in navigator)) {
+        alert("⚠️ Tu navegador no soporta notificaciones push.");
         return;
       }
 
       const permission = await Notification.requestPermission();
-      
-      if (permission !== 'granted') {
-        console.log('Permiso de notificaciones denegado');
+      if (permission !== "granted") {
+        alert('⚠️ Permisos de notificación denegados');
         return;
       }
 
-      console.log('✅ Permiso de notificaciones concedido');
+      console.log(`🔔 Activando notificaciones push para: ${username}`);
 
-      // Obtener el service worker registration
-      const registration = await navigator.serviceWorker.ready;
-      console.log('📱 Service Worker listo:', registration);
+      const result = await subscribeToPushNotifications(username);
 
-      // Obtener la clave pública VAPID del servidor
-      console.log('🔑 Obteniendo clave pública VAPID del servidor...');
-      const response = await fetch('http://localhost:4000/push/vapid-public-key');
-      const data = await response.json();
-      
-      console.log('📥 Respuesta del servidor:', data);
-      
-      if (!data.success || !data.publicKey) {
-        throw new Error('No se pudo obtener la clave pública VAPID: ' + (data.message || 'Sin mensaje'));
-      }
-
-      const vapidPublicKey = data.publicKey;
-      console.log('🔑 Clave pública VAPID obtenida:', vapidPublicKey.substring(0, 20) + '...');
-      
-      const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
-      console.log('🔄 Clave convertida a Uint8Array, longitud:', convertedVapidKey.length);
-
-      console.log('📬 Intentando suscribirse a notificaciones push...');
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: convertedVapidKey
-      });
-
-      console.log('✅ Suscripción creada exitosamente:', subscription);
-
-      const subscribeResponse = await fetch('http://localhost:4000/push/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(subscription)
-      });
-
-      const subscribeData = await subscribeResponse.json();
-
-      if (subscribeData.success) {
-        console.log('✅ Suscrito a notificaciones push');
+      if (result.success && result.subscriptionId) {
+        setSubscriptionId(result.subscriptionId);
         setNotificationsEnabled(true);
-        alert('🔔 ¡Notificaciones activadas! Recibirás alertas de nuevas cotizaciones.');
+        setUseLocalNotifications(false);
+
+        console.log('✅ Notificaciones push activadas:', result.subscriptionId);
+        alert(`🔔 Notificaciones push activadas correctamente\n¡Ya puedes recibir notificaciones del administrador!`);
+      } else {
+        throw new Error(result.error || 'Error desconocido');
       }
     } catch (error: any) {
-      console.error('❌ Error al suscribirse a notificaciones push:', error);
-      
-      if (error.name === 'AbortError' || error.message.includes('push service error')) {
-        console.warn('⚠️ Push notifications no disponibles, usando sistema alternativo');
-        
-        const useAlternative = confirm(
-          '⚠️ Las notificaciones push no están disponibles (puede ser por problemas de red o firewall).\n\n' +
-          '¿Deseas activar notificaciones locales en su lugar?\n' +
-          '(Funcionan solo cuando la app está abierta)'
-        );
-        
-        if (useAlternative) {
-          activateLocalNotifications();
-        }
-      } else if (error.name === 'NotAllowedError') {
-        alert('⚠️ Permisos denegados. Por favor, permite las notificaciones en la configuración del navegador.');
-      } else {
-        alert('⚠️ Error: ' + error.message + '\n\nIntenta recargar la página.');
+      console.error("❌ Error activando push:", error);
+
+      const fallback = confirm(
+        "Las notificaciones push fallaron.\n¿Quieres activar modo local?"
+      );
+      if (fallback) {
+        activateLocalNotifications();
       }
     }
   };
 
-  // 📡 Configuración de comunicación con el Service Worker
+  // ⭐ NUEVA FUNCIÓN: Desactivar notificaciones push
+  const deactivatePushNotifications = async () => {
+    if (!username) {
+      alert('⚠️ No se pudo obtener el nombre de usuario.');
+      return;
+    }
+
+    const confirmacion = confirm(
+      '¿Estás seguro de que quieres desactivar las notificaciones push?\n\nDejarás de recibir notificaciones del administrador.'
+    );
+
+    if (!confirmacion) return;
+
+    try {
+      console.log('🔕 Desactivando notificaciones push...');
+
+      const result = await unsubscribeFromPushNotifications(username);
+
+      if (result.success) {
+        setNotificationsEnabled(false);
+        setUseLocalNotifications(false);
+        setSubscriptionId(null);
+        
+        stopQuotationPolling();
+
+        console.log('✅ Notificaciones push desactivadas');
+        alert('🔕 Notificaciones push desactivadas correctamente');
+      } else {
+        throw new Error(result.error || 'Error desconocido');
+      }
+    } catch (error: any) {
+      console.error('❌ Error al desactivar notificaciones:', error);
+      alert(`⚠️ Error al desactivar notificaciones: ${error.message}`);
+    }
+  };
+
+  // Comunicación con el Service Worker
   useEffect(() => {
     if (navigator.serviceWorker) {
       navigator.serviceWorker.addEventListener("message", (event) => {
         if (event.data?.type === "QUOTATION_SYNCED") {
-          console.log("✅ Cotización sincronizada:", event.data.item);
-          alert(`✅ Cotización sincronizada: ${event.data.item.nombre}`);
+          alert(`Cotización sincronizada: ${event.data.item.nombre}`);
         }
       });
     }
 
-    // Cuando el usuario vuelva a estar online, reintenta enviar la cola
     window.addEventListener("online", () => {
-      console.log("[Dashboard] 🌐 Reconectado, intentando reenviar cola...");
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({ type: "PROCESS_QUEUE" });
       }
     });
 
-    // Limpiar polling al desmontar el componente
     return () => {
       stopQuotationPolling();
     };
   }, []);
 
-  // 🧩 Manejar cambios en los campos del formulario
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  // Formulario
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+  ) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  // 📬 Envío del formulario (online u offline)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!formData.nombre || !formData.telefono || !formData.moto) {
-      alert("⚠️ Por favor completa todos los campos antes de enviar.");
+      alert("Completa todos los campos.");
       return;
     }
 
     setLoading(true);
-    const online = navigator.onLine;
-    console.log(`[Dashboard] Estado conexión: ${online ? "Online" : "Offline"}`);
 
-    if (!online) {
-      //  Guardar directamente offline
+    if (!navigator.onLine) {
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({
           type: "ADD_TO_CART",
           item: formData,
         });
-        alert("📡 Cotización guardada offline. Se enviará automáticamente cuando haya conexión.");
-      } else {
-        alert("⚠️ No se pudo guardar offline. Service Worker no disponible.");
+        alert("Guardado offline. Se enviará al reconectar.");
       }
-
       setFormData({ nombre: "", telefono: "", moto: "" });
       setLoading(false);
       return;
     }
 
-    //  Si hay conexión, intentar enviar al servidor
     try {
-      const response = await fetch("http://localhost:4000/cotizacion", {
+      const res = await fetch("http://localhost:4000/cotizacion", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
       });
 
-      if (!response.ok) throw new Error("Error al enviar la cotización");
+      if (!res.ok) throw new Error();
 
-      const data = await response.json();
-      alert(`✅ Cotización enviada correctamente. ID: ${data.cotizacion._id}`);
-    } catch (err) {
-      console.warn("[Dashboard] Error de red, guardando en cola offline:", err);
+      const data = await res.json();
+      alert(`Enviado correctamente. ID: ${data.cotizacion._id}`);
+    } catch {
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({
           type: "ADD_TO_CART",
           item: formData,
         });
-        alert("📡 Cotización guardada offline. Se enviará automáticamente cuando haya conexión.");
-      } else {
-        alert("⚠️ No se pudo enviar ni guardar offline. Service Worker no disponible.");
+        alert("Guardado offline.");
       }
     } finally {
       setFormData({ nombre: "", telefono: "", moto: "" });
@@ -249,48 +226,102 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="dashboard-container">
-      {/* 🏍️ Header */}
+      {/* HEADER */}
       <header className="dashboard-header">
         <h1>🏍️ Tienda de Motos</h1>
-        <p>Bienvenido al panel de administración</p>
-        <div style={{ marginTop: '10px' }}>
+        <p>Bienvenido, {username || 'Usuario'}</p>
+
+        <div style={{ marginTop: "10px" }}>
           {notificationsEnabled ? (
-            <span style={{ color: '#4caf50', fontWeight: 'bold' }}>
-              ✅ Notificaciones activadas
-              {useLocalNotifications && (
-                <span style={{ fontSize: '0.85em', marginLeft: '8px' }}>
-                  (modo local - app abierta)
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px", alignItems: "flex-start" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ color: "#4caf50", fontWeight: "bold", fontSize: "1rem" }}>
+                  ✅ Notificaciones activadas
+                  {useLocalNotifications ? (
+                    <span style={{ fontSize: "0.85em", marginLeft: "8px", color: "#666" }}>
+                      (modo local)
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: "0.85em", marginLeft: "8px", color: "#666" }}>
+                      (push)
+                    </span>
+                  )}
+                </span>
+              </div>
+
+              {subscriptionId && !useLocalNotifications && (
+                <span style={{ fontSize: "0.75em", color: "#666", fontFamily: "monospace" }}>
+                  🆔 ID: {subscriptionId.substring(0, 25)}...
                 </span>
               )}
-            </span>
+
+              {/* ⭐ BOTÓN DE DESACTIVAR */}
+              {!useLocalNotifications && (
+                <button
+                  onClick={deactivatePushNotifications}
+                  style={{
+                    padding: "10px 18px",
+                    background: "linear-gradient(135deg, #f44336 0%, #e91e63 100%)",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    fontWeight: "bold",
+                    fontSize: "0.9rem",
+                    boxShadow: "0 4px 6px rgba(244, 67, 54, 0.3)",
+                    transition: "all 0.3s ease"
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.transform = "translateY(-2px)";
+                    e.currentTarget.style.boxShadow = "0 6px 12px rgba(244, 67, 54, 0.4)";
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.boxShadow = "0 4px 6px rgba(244, 67, 54, 0.3)";
+                  }}
+                >
+                  🔕 Desactivar Notificaciones Push
+                </button>
+              )}
+            </div>
           ) : (
-            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-              <button 
-                onClick={subscribeToPushNotifications}
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+              <button
+                onClick={activatePushNotifications}
                 style={{
-                  padding: '8px 16px',
-                  background: 'linear-gradient(135deg, #ff6b35 0%, #f7931e 100%)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '5px',
-                  cursor: 'pointer',
-                  fontWeight: 'bold'
+                  padding: "10px 18px",
+                  background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                  fontWeight: "bold",
+                  fontSize: "0.95rem",
+                  boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+                  transition: "all 0.3s ease"
                 }}
+                onMouseOver={(e) => e.currentTarget.style.transform = "translateY(-2px)"}
+                onMouseOut={(e) => e.currentTarget.style.transform = "translateY(0)"}
               >
                 🔔 Activar Notificaciones Push
               </button>
-              <button 
+
+              <button
                 onClick={activateLocalNotifications}
                 style={{
-                  padding: '8px 16px',
-                  background: 'linear-gradient(135deg, #4caf50 0%, #45a049 100%)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '5px',
-                  cursor: 'pointer',
-                  fontWeight: 'bold'
+                  padding: "10px 18px",
+                  background: "linear-gradient(135deg, #4caf50, #45a049)",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                  fontWeight: "bold",
+                  fontSize: "0.95rem",
+                  boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+                  transition: "all 0.3s ease"
                 }}
-                title="Notificaciones locales (funcionan solo cuando la app está abierta)"
+                onMouseOver={(e) => e.currentTarget.style.transform = "translateY(-2px)"}
+                onMouseOut={(e) => e.currentTarget.style.transform = "translateY(0)"}
               >
                 🔕 Modo Local
               </button>
@@ -299,21 +330,21 @@ const Dashboard: React.FC = () => {
         </div>
       </header>
 
-      {/* 📊 Estadísticas */}
+      {/* ESTADÍSTICAS */}
       <section className="dashboard-stats">
         <div className="card"><h2>15</h2><p>Motos en inventario</p></div>
         <div className="card"><h2>8</h2><p>Ventas este mes</p></div>
         <div className="card"><h2>3</h2><p>Pedidos pendientes</p></div>
       </section>
 
-      {/* ⚙️ Acciones */}
+      {/* ACCIONES */}
       <section className="dashboard-actions">
         <button>➕ Agregar Moto</button>
         <button>📦 Ver Pedidos</button>
         <button>👤 Gestionar Usuarios</button>
       </section>
 
-      {/* 📋 Catálogo */}
+      {/* CATÁLOGO */}
       <section className="dashboard-catalogo">
         <h2>📋 Catálogo de Motos</h2>
         <div className="catalogo-grid">
@@ -328,7 +359,7 @@ const Dashboard: React.FC = () => {
         </div>
       </section>
 
-      {/* 📞 Formulario de cotización */}
+      {/* FORMULARIO DE CONTACTO */}
       <section className="dashboard-contacto">
         <h2>📞 Contactar / Pedir Cotización</h2>
         <form className="contact-form" onSubmit={handleSubmit}>
@@ -338,6 +369,7 @@ const Dashboard: React.FC = () => {
             placeholder="Nombre completo"
             value={formData.nombre}
             onChange={handleChange}
+            required
           />
           <input
             type="tel"
@@ -345,8 +377,14 @@ const Dashboard: React.FC = () => {
             placeholder="Número de teléfono"
             value={formData.telefono}
             onChange={handleChange}
+            required
           />
-          <select name="moto" value={formData.moto} onChange={handleChange}>
+          <select 
+            name="moto" 
+            value={formData.moto} 
+            onChange={handleChange}
+            required
+          >
             <option value="">Selecciona una moto</option>
             {motos.map((moto, index) => (
               <option key={index} value={moto.nombre}>{moto.nombre}</option>
@@ -357,6 +395,8 @@ const Dashboard: React.FC = () => {
           </button>
         </form>
       </section>
+
+      {/* <PushNotificationTester /> */}
     </div>
   );
 };

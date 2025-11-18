@@ -22,8 +22,18 @@ const Login: React.FC = () => {
       const data = await res.json();
 
       if (res.ok) {
+        // ⭐ NUEVO: Guardar username y rol en localStorage
+        localStorage.setItem('username', data.username);
+        localStorage.setItem('isAdmin', data.admin);
+        
         alert(`✅ Bienvenido ${data.username}`);
-        navigate("/dashboard");
+        
+        // ⭐ NUEVO: Redirigir según el rol
+        if (data.admin === "si") {
+          navigate("/admin");
+        } else {
+          navigate("/dashboard");
+        }
       } else {
         alert(`❌ ${data.message}`);
       }
