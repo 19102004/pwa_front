@@ -25,8 +25,7 @@ const Dashboard = () => {
   const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
   const [username, setUsername] = useState<string>('');
   const [pendingQuotations, setPendingQuotations] = useState(0);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [selectedMoto, setSelectedMoto] = useState<typeof motos[0] | null>(null); // ⭐ Estado para modal
+  const [isSubmitting, setIsSubmitting] = useState(false); // ⭐ Nuevo flag anti-duplicados
 
   // Recuperar username y verificar suscripción al cargar
   useEffect(() => {
@@ -210,30 +209,6 @@ const Dashboard = () => {
     };
   }, []);
 
-  // ⭐ Función para abrir modal
-  const handleVerMas = (moto: typeof motos[0]) => {
-    console.log('📸 Abriendo modal para:', moto.nombre);
-    console.log('🌐 Estado de conexión:', navigator.onLine ? 'ONLINE' : 'OFFLINE');
-    setSelectedMoto(moto);
-  };
-
-  // ⭐ Función para cerrar modal
-  const handleCerrarModal = () => {
-    setSelectedMoto(null);
-  };
-
-  // ⭐ Cerrar modal con tecla ESC
-  useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && selectedMoto) {
-        handleCerrarModal();
-      }
-    };
-
-    window.addEventListener('keydown', handleEsc);
-    return () => window.removeEventListener('keydown', handleEsc);
-  }, [selectedMoto]);
-
   // Formulario
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
@@ -335,10 +310,13 @@ const Dashboard = () => {
       }
 
       console.log('✅ COTIZACIÓN ENVIADA EXITOSAMENTE');
-      alert(`✅ Cotización enviada\n👤 ${data.cotizacion.nombre}\n🏍️ ${data.cotizacion.moto}`);
+      alert(`✅ Cotización enviada correctamente!\n📋 ID: ${data.cotizacion._id}\n👤 Cliente: ${data.cotizacion.nombre}`);
 
-      // ⭐ NO procesar cola aquí, solo si el usuario estaba offline antes
-      // El evento 'online' ya maneja eso automáticamente
+      // ⭐ Procesar SOLO la cola pendiente (no la que acabamos de enviar)
+      if (navigator.serviceWorker.controller && pendingQuotations > 0) {
+        console.log('🔄 Procesando cotizaciones pendientes...');
+        navigator.serviceWorker.controller.postMessage({ type: "PROCESS_QUEUE" });
+      }
 
     } catch (error: any) {
       console.group('❌ ERROR EN ENVÍO');
@@ -358,10 +336,10 @@ const Dashboard = () => {
           type: "ADD_TO_CART",
           item: formData,
         });
-        alert(`💾 Cotización guardada\nSe enviará al reconectar`);
+        alert(`💾 Cotización guardada offline.\nSe enviará al restaurar conexión.`);
         checkPendingQueue();
       } else if (!shouldSaveOffline) {
-        // No mostrar alerta, ya se mostró el error en el confirm
+        alert(`❌ Cotización no guardada. Intenta nuevamente.`);
       }
     } finally {
       setFormData({ nombre: "", telefono: "", moto: "" });
@@ -515,12 +493,7 @@ const Dashboard = () => {
               <img src={moto.imagen} alt={moto.nombre} />
               <h3>{moto.nombre}</h3>
               <p>{moto.descripcion}</p>
-              <button 
-                className="btn-vermas"
-                onClick={() => handleVerMas(moto)}
-              >
-                Ver más
-              </button>
+              <button className="btn-vermas">Ver más</button>
             </div>
           ))}
         </div>
@@ -568,206 +541,6 @@ const Dashboard = () => {
           </p>
         )}
       </section>
-
-      {/* ⭐ MODAL DE MOTO */}
-      {selectedMoto && (
-        <div 
-          className="modal-overlay"
-          onClick={handleCerrarModal}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.85)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-            animation: 'fadeIn 0.3s ease-in-out'
-          }}
-        >
-          <div 
-            className="modal-content"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              position: 'relative',
-              backgroundColor: 'white',
-              borderRadius: '20px',
-              padding: '30px',
-              maxWidth: '90%',
-              maxHeight: '90%',
-              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
-              animation: 'scaleIn 0.3s ease-in-out',
-              overflow: 'auto'
-            }}
-          >
-            {/* Botón cerrar */}
-            <button
-              onClick={handleCerrarModal}
-              style={{
-                position: 'absolute',
-                top: '15px',
-                right: '15px',
-                background: 'linear-gradient(135deg, #f44336 0%, #e91e63 100%)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '50%',
-                width: '40px',
-                height: '40px',
-                fontSize: '24px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 4px 8px rgba(0, 0, 0, 0.2)',
-                transition: 'all 0.3s ease',
-                fontWeight: 'bold',
-                zIndex: 1
-              }}
-              onMouseOver={(e) => {
-                e.currentTarget.style.transform = 'rotate(90deg) scale(1.1)';
-                e.currentTarget.style.boxShadow = '0 6px 12px rgba(0, 0, 0, 0.3)';
-              }}
-              onMouseOut={(e) => {
-                e.currentTarget.style.transform = 'rotate(0deg) scale(1)';
-                e.currentTarget.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
-              }}
-            >
-              ×
-            </button>
-
-            {/* Contenido del modal */}
-            <div style={{ textAlign: 'center' }}>
-              <h2 style={{ 
-                marginBottom: '20px', 
-                color: '#333',
-                fontSize: '2rem',
-                fontWeight: 'bold'
-              }}>
-                {selectedMoto.nombre}
-              </h2>
-
-              {/* Indicador de cache */}
-              <div style={{
-                display: 'inline-block',
-                padding: '8px 16px',
-                backgroundColor: navigator.onLine ? '#4caf50' : '#ff9800',
-                color: 'white',
-                borderRadius: '20px',
-                fontSize: '0.9rem',
-                fontWeight: 'bold',
-                marginBottom: '20px',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-              }}>
-                {navigator.onLine ? '🌐 Cargando desde internet' : '📴 Cargando desde cache'}
-              </div>
-
-              {/* Imagen grande */}
-              <div style={{
-                backgroundColor: '#f5f5f5',
-                borderRadius: '15px',
-                padding: '20px',
-                marginBottom: '20px'
-              }}>
-                <img 
-                  src={selectedMoto.imagen} 
-                  alt={selectedMoto.nombre}
-                  style={{
-                    maxWidth: '100%',
-                    height: 'auto',
-                    maxHeight: '500px',
-                    objectFit: 'contain',
-                    borderRadius: '10px'
-                  }}
-                  onLoad={() => console.log('✅ Imagen cargada:', selectedMoto.nombre)}
-                  onError={(e) => {
-                    console.error('❌ Error cargando imagen');
-                    (e.target as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              </div>
-
-              {/* Descripción */}
-              <p style={{
-                fontSize: '1.1rem',
-                color: '#666',
-                lineHeight: '1.6',
-                marginBottom: '20px'
-              }}>
-                {selectedMoto.descripcion}
-              </p>
-
-              {/* Información adicional */}
-              <div style={{
-                backgroundColor: '#f8f9fa',
-                padding: '15px',
-                borderRadius: '10px',
-                marginTop: '20px'
-              }}>
-                <p style={{ fontSize: '0.9rem', color: '#666', margin: 0 }}>
-                  💡 <strong>Tip:</strong> Esta imagen funciona incluso sin conexión gracias al Service Worker cache
-                </p>
-              </div>
-
-              {/* Botón de cotizar */}
-              <button
-                onClick={() => {
-                  setFormData({ ...formData, moto: selectedMoto.nombre });
-                  handleCerrarModal();
-                  // Scroll al formulario
-                  document.querySelector('.dashboard-contacto')?.scrollIntoView({ 
-                    behavior: 'smooth' 
-                  });
-                }}
-                style={{
-                  marginTop: '20px',
-                  padding: '12px 30px',
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '25px',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  cursor: 'pointer',
-                  boxShadow: '0 4px 8px rgba(0,0,0,0.2)',
-                  transition: 'all 0.3s ease'
-                }}
-                onMouseOver={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 6px 12px rgba(0,0,0,0.3)';
-                }}
-                onMouseOut={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
-                }}
-              >
-                📋 Cotizar esta moto
-              </button>
-            </div>
-          </div>
-
-          {/* Animaciones CSS */}
-          <style>{`
-            @keyframes fadeIn {
-              from { opacity: 0; }
-              to { opacity: 1; }
-            }
-            
-            @keyframes scaleIn {
-              from { 
-                opacity: 0;
-                transform: scale(0.9);
-              }
-              to { 
-                opacity: 1;
-                transform: scale(1);
-              }
-            }
-          `}</style>
-        </div>
-      )}
     </div>
   );
 };
