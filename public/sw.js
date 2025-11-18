@@ -1,5 +1,5 @@
-const CACHE_NAME = 'pwa-v6';
-const RUNTIME_CACHE = 'cache-v6';
+const CACHE_NAME = 'pwa-v7'; // ⭐ Incrementa versión
+const RUNTIME_CACHE = 'cache-v7';
 const IDB_NAME = 'pwa-cart-db';
 const IDB_VERSION = 1;
 const IDB_STORE = 'cartQueue';
@@ -9,8 +9,6 @@ const PRECACHE_URLS = [
   '/index.html',
   '/manifest.json',
   '/favicon.ico',
-  '/assets/index.css',
-  '/assets/index.js',
   '/cb190r.png',
   '/cbr.png',
   '/fireblade.png',
@@ -48,9 +46,10 @@ async function idbAddCartRecord(record) {
   const db = await openCartDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).add({ ...record, createdAt: Date.now() });
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
+    const store = tx.objectStore(IDB_STORE);
+    const request = store.add({ ...record, createdAt: Date.now() });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
   });
 }
 
@@ -68,66 +67,91 @@ async function idbDeleteRecord(id) {
   const db = await openCartDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).delete(id);
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
+    const deleteRequest = tx.objectStore(IDB_STORE).delete(id);
+    deleteRequest.onsuccess = () => resolve();
+    deleteRequest.onerror = () => reject(deleteRequest.error);
   });
 }
 
 // ======== Instalar / Activar ========
 
 self.addEventListener('install', event => {
-  console.log('[SW] Instalando...');
+  console.log('[SW] 🔧 Instalando versión', CACHE_NAME);
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache =>
-      Promise.all(
+      Promise.allSettled(
         PRECACHE_URLS.map(url =>
           fetch(url)
-            .then(res => res.ok && cache.put(url, res))
-            .catch(() => {})
+            .then(res => {
+              if (res.ok) {
+                return cache.put(url, res);
+              }
+              console.warn(`[SW] ⚠️ No se pudo cachear ${url}`);
+            })
+            .catch(err => console.warn(`[SW] ⚠️ Error cacheando ${url}:`, err))
         )
       )
-    ).then(() => self.skipWaiting())
+    ).then(() => {
+      console.log('[SW] ✅ Precache completado');
+      return self.skipWaiting();
+    })
   );
 });
 
 self.addEventListener('activate', event => {
-  console.log('[SW] Activando...');
+  console.log('[SW] 🔄 Activando nueva versión');
   event.waitUntil(
     caches.keys().then(keys =>
       Promise.all(keys.map(k => {
         if (![CACHE_NAME, RUNTIME_CACHE].includes(k)) {
+          console.log('[SW] 🗑️ Eliminando cache antigua:', k);
           return caches.delete(k);
         }
       }))
-    ).then(() => self.clients.claim())
+    ).then(() => {
+      console.log('[SW] ✅ Service Worker activado');
+      return self.clients.claim();
+    })
   );
 });
 
-// ======== Estrategia de cache ========
+// ======== Estrategia de cache (solo GET) ========
 
 self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
 
-  if (url.origin !== location.origin || request.method !== 'GET') return;
+  // ⚠️ IMPORTANTE: Solo cachear GET requests del mismo origen
+  if (request.method !== 'GET' || url.origin !== location.origin) {
+    return; // Dejar pasar POST/PUT/DELETE sin interceptar
+  }
 
   event.respondWith(
     caches.match(request).then(cached => {
       if (cached) {
-        // Actualiza en segundo plano
+        // Actualiza en segundo plano si hay conexión
         fetch(request).then(res => {
-          if (res.ok) {
+          if (res && res.ok) {
             caches.open(RUNTIME_CACHE).then(cache => cache.put(request, res.clone()));
           }
         }).catch(() => {});
         return cached;
       }
 
-      // Sin conexión → intenta servir index.html
-      return fetch(request).catch(() =>
-        caches.match('/index.html')
-      );
+      // No hay cache, intenta fetch
+      return fetch(request).then(response => {
+        // Si es un recurso que debe cachearse, guárdalo
+        if (response.ok && shouldAutoCache(url)) {
+          const responseClone = response.clone();
+          caches.open(RUNTIME_CACHE).then(cache => {
+            cache.put(request, responseClone);
+          });
+        }
+        return response;
+      }).catch(() => {
+        // Sin conexión, intenta servir index.html para SPA
+        return caches.match('/index.html');
+      });
     })
   );
 });
@@ -137,56 +161,153 @@ self.addEventListener('fetch', event => {
 self.addEventListener('message', event => {
   if (!event.data) return;
 
+  console.log('[SW] 📨 Mensaje recibido:', event.data.type);
+
   switch (event.data.type) {
     case 'ADD_TO_CART':
-      idbAddCartRecord(event.data.item)
-        .then(() => console.log('[SW] Guardado offline:', event.data.item))
-        .catch(err => console.error('[SW] Error guardando offline', err));
+      handleAddToCart(event);
       break;
 
     case 'PROCESS_QUEUE':
       processCartQueue();
       break;
+
+    case 'CHECK_QUEUE':
+      checkQueueStatus(event);
+      break;
   }
 });
+
+// ⭐ Nuevo: Manejar guardado offline
+async function handleAddToCart(event) {
+  try {
+    const id = await idbAddCartRecord(event.data.item);
+    console.log('[SW] 💾 Guardado offline con ID:', id);
+    
+    // Confirmar al cliente
+    if (event.source) {
+      event.source.postMessage({
+        type: 'CART_SAVED',
+        success: true,
+        item: { ...event.data.item, id }
+      });
+    }
+
+    // Si hay conexión, intentar enviar inmediatamente
+    if (navigator.onLine) {
+      console.log('[SW] 🌐 Detectada conexión, intentando enviar...');
+      await processCartQueue();
+    }
+  } catch (error) {
+    console.error('[SW] ❌ Error guardando offline:', error);
+    if (event.source) {
+      event.source.postMessage({
+        type: 'CART_SAVED',
+        success: false,
+        error: error.message
+      });
+    }
+  }
+}
+
+// ⭐ Nuevo: Verificar estado de la cola
+async function checkQueueStatus(event) {
+  try {
+    const items = await idbGetAllCartRecords();
+    if (event.source) {
+      event.source.postMessage({
+        type: 'QUEUE_STATUS',
+        count: items.length,
+        items
+      });
+    }
+  } catch (error) {
+    console.error('[SW] ❌ Error verificando cola:', error);
+  }
+}
 
 // ======== Procesar cola offline ========
 
 async function processCartQueue() {
   try {
     const items = await idbGetAllCartRecords();
-    if (!items.length) return;
+    
+    if (!items.length) {
+      console.log('[SW] ✅ Cola vacía, nada que enviar');
+      return;
+    }
 
-    console.log('[SW] Intentando reenviar', items.length, 'cotizaciones...');
+    console.log(`[SW] 📤 Procesando ${items.length} cotizaciones pendientes...`);
 
     const endpoint = 'https://pwa-back-h0cr.onrender.com/cotizacion';
+    let successCount = 0;
+    let failCount = 0;
 
     for (const item of items) {
       try {
+        console.log('[SW] 🚀 Enviando cotización:', item.nombre);
+
         const res = await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(item)
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            nombre: item.nombre,
+            telefono: item.telefono,
+            moto: item.moto
+          })
         });
 
         if (res.ok) {
           await idbDeleteRecord(item.id);
-          console.log('[SW] ✅ Enviada cotización offline:', item);
+          successCount++;
+          console.log('[SW] ✅ Cotización enviada:', item.nombre);
 
-          // Notifica al cliente React
+          // Notificar al cliente
           const allClients = await self.clients.matchAll({ includeUncontrolled: true });
           allClients.forEach(client =>
-            client.postMessage({ type: 'QUOTATION_SYNCED', item })
+            client.postMessage({ 
+              type: 'QUOTATION_SYNCED', 
+              item,
+              success: true
+            })
           );
+        } else {
+          const errorData = await res.json().catch(() => ({}));
+          failCount++;
+          console.warn('[SW] ⚠️ Error HTTP al enviar cotización:', res.status, errorData);
         }
       } catch (err) {
-        console.warn('[SW] ⚠ Error enviando', item, err);
+        failCount++;
+        console.error('[SW] ❌ Error enviando cotización:', err);
       }
     }
+
+    console.log(`[SW] 📊 Resultado: ${successCount} éxito, ${failCount} fallos`);
+
+    // Notificar resumen al cliente
+    const allClients = await self.clients.matchAll({ includeUncontrolled: true });
+    allClients.forEach(client =>
+      client.postMessage({ 
+        type: 'SYNC_COMPLETE',
+        successCount,
+        failCount,
+        total: items.length
+      })
+    );
+
   } catch (err) {
-    console.error('[SW] ❌ Error procesando la cola', err);
+    console.error('[SW] ❌ Error crítico procesando cola:', err);
   }
 }
+
+// ⭐ Auto-sincronizar cuando se recupera conexión
+self.addEventListener('online', () => {
+  console.log('[SW] 🌐 Conexión restaurada, procesando cola...');
+  processCartQueue();
+});
 
 // ======== Notificaciones Push ========
 
@@ -204,9 +325,9 @@ self.addEventListener('push', event => {
   if (event.data) {
     try {
       notificationData = event.data.json();
-      console.log('[SW] Datos de notificación:', notificationData);
+      console.log('[SW] 📋 Datos de notificación:', notificationData);
     } catch (err) {
-      console.error('[SW] Error parseando datos de notificación:', err);
+      console.error('[SW] ❌ Error parseando notificación:', err);
     }
   }
 
@@ -229,29 +350,22 @@ self.addEventListener('push', event => {
   );
 });
 
-// Manejar clicks en las notificaciones
 self.addEventListener('notificationclick', event => {
   console.log('[SW] 🖱️ Click en notificación:', event.action);
-
   event.notification.close();
 
-  if (event.action === 'close') {
-    return;
-  }
+  if (event.action === 'close') return;
 
-  // Abrir o enfocar la aplicación
   const urlToOpen = event.notification.data?.url || '/';
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then(windowClients => {
-        // Buscar si ya hay una ventana abierta
         for (let client of windowClients) {
           if (client.url.includes(urlToOpen) && 'focus' in client) {
             return client.focus();
           }
         }
-        // Si no hay ventana abierta, abrir una nueva
         if (clients.openWindow) {
           return clients.openWindow(urlToOpen);
         }
@@ -259,4 +373,4 @@ self.addEventListener('notificationclick', event => {
   );
 });
 
-console.log('[SW] 🎬 Cargado');
+console.log('[SW] 🎬 Service Worker cargado - Versión', CACHE_NAME);
