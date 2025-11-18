@@ -1,13 +1,15 @@
 {
+  "cleanUrls": true,
   "rewrites": [
     { "source": "/sw.js", "destination": "/sw.js" },
     { "source": "/manifest.json", "destination": "/manifest.json" },
-    { "source": "/(.*)", "destination": "/" }
+    { "source": "/robots.txt", "destination": "/robots.txt" }
   ],
   "headers": [
     {
       "source": "/sw.js",
       "headers": [
+        { "key": "Cache-Control", "value": "no-store" },
         { "key": "Content-Type", "value": "application/javascript" }
       ]
     }
